@@ -1,88 +1,64 @@
 import React, { useState, useEffect } from 'react';
-import MessageList from './MessageList';
-import MessageInput from './MessageInput';
-import UserList from './UserList';
-import socketService from '../services/socket';
-import './Chat.css';
+import socket from './socket';
 
-const Chat = ({ user, onLeave }) => {
+function Chat() {
+  const [message, setMessage] = useState('');
   const [messages, setMessages] = useState([]);
-  const [users, setUsers] = useState([]);
-  const [typingUsers, setTypingUsers] = useState([]);
+  const [username, setUsername] = useState('');
+  const [isUsernameSet, setIsUsernameSet] = useState(false);
+
+  const sendMessage = () => {
+    if (message.trim()) {
+      const messageData = {
+        sender: username,
+        message: message,
+      };
+      socket.emit('send_message', messageData);
+      setMessages(prev => [...prev, messageData]);
+      setMessage('');
+    }
+  };
 
   useEffect(() => {
-    // Connect to socket and join room
-    socketService.connect();
-    socketService.joinRoom(user);
-
-    // Set up event listeners
-    socketService.onMessage((message) => {
-      setMessages(prev => [...prev, message]);
+    socket.on('receive_message', (data) => {
+      setMessages(prev => [...prev, data]);
     });
 
-    socketService.onMessageHistory((history) => {
-      setMessages(history);
-    });
+    return () => socket.off('receive_message');
+  }, []);
 
-    socketService.onUserList((userList) => {
-      setUsers(userList);
-    });
-
-    socketService.onUserTyping((data) => {
-      setTypingUsers(prev => {
-        if (data.isTyping) {
-          return prev.includes(data.username) 
-            ? prev 
-            : [...prev, data.username];
-        } else {
-          return prev.filter(username => username !== data.username);
-        }
-      });
-    });
-
-    // Cleanup on unmount
-    return () => {
-      socketService.disconnect();
-    };
-  }, [user]);
-
-  const handleSendMessage = (message) => {
-    socketService.sendMessage(message);
-  };
-
-  const handleTyping = (isTyping) => {
-    socketService.setTyping(isTyping);
-  };
-
-  const handleLeave = () => {
-    socketService.disconnect();
-    onLeave();
-  };
+  if (!isUsernameSet) {
+    return (
+      <div>
+        <h2>Enter your name to start chatting:</h2>
+        <input
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          placeholder="Your name"
+        />
+        <button onClick={() => username.trim() && setIsUsernameSet(true)}>Join Chat</button>
+      </div>
+    );
+  }
 
   return (
-    <div className="chat-container">
-      <div className="chat-header">
-        <h2>Chat Room: {user.room}</h2>
-        <button className="leave-button" onClick={handleLeave}>
-          Leave Chat
-        </button>
+    <div>
+      <h2>Welcome, {username}</h2>
+      <div style={{ height: '200px', overflowY: 'auto', border: '1px solid #ccc', padding: '10px' }}>
+        {messages.map((msg, idx) => (
+          <div key={idx}>
+            <strong>{msg.sender}:</strong> {msg.message}
+          </div>
+        ))}
       </div>
-      
-      <div className="chat-body">
-        <div className="chat-main">
-          <MessageList messages={messages} typingUsers={typingUsers} />
-          <MessageInput 
-            onSendMessage={handleSendMessage}
-            onTyping={handleTyping}
-          />
-        </div>
-        
-        <div className="chat-sidebar">
-          <UserList users={users} currentUser={user.username} />
-        </div>
-      </div>
+      <input 
+        value={message} 
+        onChange={(e) => setMessage(e.target.value)} 
+        placeholder="Type something..." 
+      />
+      <button onClick={sendMessage}>Send</button>
     </div>
   );
-};
+}
 
 export default Chat;
