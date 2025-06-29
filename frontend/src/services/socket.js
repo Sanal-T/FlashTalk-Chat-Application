@@ -1,167 +1,123 @@
 import { io } from 'socket.io-client';
 
-class SocketService {
-  constructor() {
-    this.socket = null;
-    this.listeners = new Map();
-  }
+let socket = null;
 
-  connect(serverUrl = 'http://localhost:3001') {
-    try {
-      if (this.socket) {
-        this.disconnect();
-      }
+const SOCKET_URL = process.env.REACT_APP_SOCKET_URL || 'http://localhost:5000';
 
-      this.socket = io(serverUrl, {
-        autoConnect: true,
-        reconnection: true,
-        reconnectionAttempts: 5,
-        reconnectionDelay: 1000,
-        reconnectionDelayMax: 5000,
-        timeout: 20000,
-        transports: ['websocket', 'polling']
-      });
-
-      this.setupEventListeners();
-      return this.socket;
-    } catch (error) {
-      console.error('Socket connection error:', error);
-      throw error;
+export const initializeSocket = (user) => {
+  try {
+    if (socket) {
+      socket.disconnect();
     }
+
+    socket = io(SOCKET_URL, {
+      autoConnect: true,
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
+      maxReconnectionAttempts: 5,
+      timeout: 20000,
+      forceNew: true
+    });
+
+    // Add connection event listeners
+    socket.on('connect', () => {
+      console.log('Connected to server');
+      if (user) {
+        socket.emit('user_connected', user);
+      }
+    });
+
+    socket.on('disconnect', (reason) => {
+      console.log('Disconnected from server:', reason);
+    });
+
+    socket.on('connect_error', (error) => {
+      console.error('Connection error:', error);
+    });
+
+    socket.on('reconnect', (attemptNumber) => {
+      console.log('Reconnected after', attemptNumber, 'attempts');
+    });
+
+    socket.on('reconnect_error', (error) => {
+      console.error('Reconnection failed:', error);
+    });
+
+    socket.on('reconnect_failed', () => {
+      console.error('Failed to reconnect to server');
+    });
+
+    return socket;
+  } catch (error) {
+    console.error('Error initializing socket:', error);
+    return null;
   }
+};
 
-  setupEventListeners() {
-    if (!this.socket) return;
+export const getSocket = () => {
+  return socket;
+};
 
-    this.socket.on('connect', () => {
-      console.log('✅ Connected to server:', this.socket.id);
-    });
-
-    this.socket.on('disconnect', (reason) => {
-      console.log('❌ Disconnected from server:', reason);
-    });
-
-    this.socket.on('connect_error', (error) => {
-      console.error('🔥 Connection error:', error);
-    });
-
-    this.socket.on('reconnect', (attemptNumber) => {
-      console.log('🔄 Reconnected to server, attempt:', attemptNumber);
-    });
-
-    this.socket.on('reconnect_error', (error) => {
-      console.error('🔥 Reconnection error:', error);
-    });
+export const disconnectSocket = () => {
+  try {
+    if (socket) {
+      socket.disconnect();
+      socket = null;
+    }
+  } catch (error) {
+    console.error('Error disconnecting socket:', error);
   }
+};
 
-  // Join a room
-  joinRoom(username, room) {
-    if (this.socket && this.socket.connected) {
-      this.socket.emit('join_room', { username, room });
+export const emitMessage = (event, data) => {
+  try {
+    if (socket && socket.connected) {
+      socket.emit(event, data);
+      return true;
     } else {
-      console.error('Socket not connected - cannot join room');
+      console.warn('Socket not connected. Cannot emit:', event);
+      return false;
     }
+  } catch (error) {
+    console.error('Error emitting message:', error);
+    return false;
   }
+};
 
-  // Leave a room
-  leaveRoom(username, room) {
-    if (this.socket && this.socket.connected) {
-      this.socket.emit('leave_room', { username, room });
-    }
-  }
-
-  // Send a message
-  sendMessage(username, room, message) {
-    if (this.socket && this.socket.connected) {
-      this.socket.emit('send_message', {
-        username,
-        room,
-        message,
-        timestamp: new Date().toISOString()
-      });
+export const onMessage = (event, callback) => {
+  try {
+    if (socket) {
+      socket.on(event, callback);
+      return true;
     } else {
-      console.error('Socket not connected - cannot send message');
-      throw new Error('Not connected to server');
+      console.warn('Socket not available for listening to:', event);
+      return false;
     }
+  } catch (error) {
+    console.error('Error setting up message listener:', error);
+    return false;
   }
+};
 
-  // Typing indicators
-  startTyping(username, room) {
-    if (this.socket && this.socket.connected) {
-      this.socket.emit('typing', { username, room });
-    }
-  }
-
-  stopTyping(username, room) {
-    if (this.socket && this.socket.connected) {
-      this.socket.emit('stop_typing', { username, room });
-    }
-  }
-
-  // Event listeners
-  on(event, callback) {
-    if (this.socket) {
-      this.socket.on(event, callback);
-      // Store callback for cleanup
-      if (!this.listeners.has(event)) {
-        this.listeners.set(event, new Set());
+export const offMessage = (event, callback) => {
+  try {
+    if (socket) {
+      if (callback) {
+        socket.off(event, callback);
+      } else {
+        socket.off(event);
       }
-      this.listeners.get(event).add(callback);
+      return true;
     }
+    return false;
+  } catch (error) {
+    console.error('Error removing message listener:', error);
+    return false;
   }
+};
 
-  off(event, callback) {
-    if (this.socket) {
-      this.socket.off(event, callback);
-      if (this.listeners.has(event)) {
-        this.listeners.get(event).delete(callback);
-      }
-    }
-  }
-
-  // Remove all listeners for an event
-  removeAllListeners(event) {
-    if (this.socket) {
-      this.socket.removeAllListeners(event);
-      this.listeners.delete(event);
-    }
-  }
-
-  // Get connection status
-  isConnected() {
-    return this.socket && this.socket.connected;
-  }
-
-  // Get socket ID
-  getSocketId() {
-    return this.socket ? this.socket.id : null;
-  }
-
-  // Disconnect
-  disconnect() {
-    if (this.socket) {
-      // Clean up all listeners
-      this.listeners.forEach((callbacks, event) => {
-        callbacks.forEach(callback => {
-          this.socket.off(event, callback);
-        });
-      });
-      this.listeners.clear();
-
-      this.socket.disconnect();
-      this.socket = null;
-    }
-  }
-
-  // Force reconnection
-  reconnect() {
-    if (this.socket) {
-      this.socket.connect();
-    }
-  }
-}
-
-// Create singleton instance
-const socketService = new SocketService();
-
-export default socketService;
+export const isSocketConnected = () => {
+  return socket && socket.connected;
+};
