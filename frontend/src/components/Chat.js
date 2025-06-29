@@ -1,269 +1,275 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import MessageList from './MessageList';
-import MessageInput from './MessageInput';
-import UserList from './UserList';
-import { getSocket, onMessage, offMessage, emitMessage, isSocketConnected } from '../services/socket';
+import React, { useState, useEffect, useRef } from 'react';
+import io from 'socket.io-client';
+import './Chat.css';
 
-const Chat = ({ user }) => {
+const Chat = () => {
+  const [socket, setSocket] = useState(null);
   const [messages, setMessages] = useState([]);
-  const [onlineUsers, setOnlineUsers] = useState([]);
+  const [newMessage, setNewMessage] = useState('');
+  const [username, setUsername] = useState('');
   const [isConnected, setIsConnected] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [onlineUsers, setOnlineUsers] = useState([]);
+  const [onlineCount, setOnlineCount] = useState(0);
+  const [isTyping, setIsTyping] = useState(false);
   const [typingUsers, setTypingUsers] = useState([]);
-  
+
   const messagesEndRef = useRef(null);
   const typingTimeoutRef = useRef(null);
 
-  // Scroll to bottom of messages
-  const scrollToBottom = useCallback(() => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, []);
-
-  // Handle received message
-  const handleMessageReceived = useCallback((message) => {
-    try {
-      if (message && typeof message === 'object') {
-        setMessages(prevMessages => {
-          // Prevent duplicate messages
-          const messageExists = prevMessages.some(m => 
-            m.id === message.id || 
-            (m.timestamp === message.timestamp && m.text === message.text && m.sender === message.sender)
-          );
-          
-          if (!messageExists) {
-            return [...prevMessages, {
-              id: message.id || Date.now() + Math.random(),
-              text: message.text || '',
-              sender: message.sender || 'Unknown',
-              timestamp: message.timestamp || new Date().toISOString()
-            }];
-          }
-          return prevMessages;
-        });
-        scrollToBottom();
-      }
-    } catch (err) {
-      console.error('Error handling received message:', err);
-    }
-  }, [scrollToBottom]);
-
-  // Handle user list updates
-  const handleUserListUpdate = useCallback((users) => {
-    try {
-      if (Array.isArray(users)) {
-        setOnlineUsers(users.filter(u => u && u.id));
-      }
-    } catch (err) {
-      console.error('Error updating user list:', err);
-    }
-  }, []);
-
-  // Handle typing indicators
-  const handleUserTyping = useCallback((data) => {
-    try {
-      if (data && data.userId && data.userId !== user?.id) {
-        setTypingUsers(prev => {
-          const filtered = prev.filter(u => u.userId !== data.userId);
-          return data.isTyping ? [...filtered, data] : filtered;
-        });
-      }
-    } catch (err) {
-      console.error('Error handling typing indicator:', err);
-    }
-  }, [user?.id]);
-
-  // Handle connection status
-  const handleConnectionStatus = useCallback((connected) => {
-    setIsConnected(connected);
-    if (connected) {
-      setError(null);
-    } else {
-      setError('Connection lost. Attempting to reconnect...');
-    }
-  }, []);
-
-  // Setup socket listeners
   useEffect(() => {
-    const socket = getSocket();
-    // Copy the ref value at the start of the effect
-    const initialTypingTimeoutId = typingTimeoutRef.current;
-    
-    if (!socket) {
-      setError('Socket connection not available');
-      setIsLoading(false);
-      return;
-    }
+    // Initialize socket connection
+    const newSocket = io(process.env.REACT_APP_SERVER_URL || 'http://localhost:5000', {
+      transports: ['websocket', 'polling'],
+      autoConnect: true,
+      reconnection: true,
+      reconnectionAttempts: 5,
+      reconnectionDelay: 1000,
+    });
 
-    try {
-      // Connection status listeners
-      onMessage('connect', () => handleConnectionStatus(true));
-      onMessage('disconnect', () => handleConnectionStatus(false));
-      onMessage('connect_error', () => setError('Failed to connect to server'));
+    setSocket(newSocket);
+
+    // Connection event handlers
+    newSocket.on('connect', () => {
+      console.log('Connected to server');
+      setIsConnected(true);
       
-      // Message and user listeners
-      onMessage('message_received', handleMessageReceived);
-      onMessage('user_list_updated', handleUserListUpdate);
-      onMessage('user_typing', handleUserTyping);
-      
-      // Load initial messages
-      onMessage('message_history', (history) => {
-        try {
-          if (Array.isArray(history)) {
-            setMessages(history.map(msg => ({
-              id: msg.id || Date.now() + Math.random(),
-              text: msg.text || '',
-              sender: msg.sender || 'Unknown',
-              timestamp: msg.timestamp || new Date().toISOString()
-            })));
+      // Join with username if available
+      if (username) {
+        newSocket.emit('user_joined', { username });
+      }
+    });
+
+    newSocket.on('disconnect', () => {
+      console.log('Disconnected from server');
+      setIsConnected(false);
+    });
+
+    // Message event handlers
+    newSocket.on('receive_message', (message) => {
+      console.log('Received message:', message);
+      setMessages(prevMessages => [...prevMessages, {
+        id: message.id || Date.now(),
+        username: message.username,
+        content: message.content,
+        timestamp: message.timestamp
+      }]);
+    });
+
+    newSocket.on('message_history', (history) => {
+      console.log('Received message history:', history);
+      setMessages(history.map(msg => ({
+        id: msg._id || msg.id || Date.now(),
+        username: msg.username,
+        content: msg.content,
+        timestamp: msg.timestamp
+      })));
+    });
+
+    // Online users event handlers
+    newSocket.on('online_users_updated', (data) => {
+      console.log('Online users updated:', data);
+      setOnlineUsers(data.users || []);
+      setOnlineCount(data.count || 0);
+    });
+
+    // Typing indicator handlers
+    newSocket.on('user_typing', (data) => {
+      if (data.username !== username) {
+        setTypingUsers(prev => {
+          if (data.isTyping) {
+            return [...prev.filter(user => user !== data.username), data.username];
+          } else {
+            return prev.filter(user => user !== data.username);
           }
-        } catch (err) {
-          console.error('Error loading message history:', err);
-        } finally {
-          setIsLoading(false);
-        }
-      });
-
-      // Request initial data
-      if (isSocketConnected()) {
-        emitMessage('get_message_history');
-        emitMessage('get_online_users');
-        setIsConnected(true);
-        setIsLoading(false);
-      } else {
-        setTimeout(() => setIsLoading(false), 3000); // Timeout fallback
-      }
-
-    } catch (err) {
-      console.error('Error setting up socket listeners:', err);
-      setError('Failed to setup chat connection');
-      setIsLoading(false);
-    }
-
-    // Cleanup function
-    return () => {
-      try {
-        offMessage('connect');
-        offMessage('disconnect');
-        offMessage('connect_error');
-        offMessage('message_received');
-        offMessage('user_list_updated');
-        offMessage('user_typing');
-        offMessage('message_history');
-        
-        if (initialTypingTimeoutId) {
-          clearTimeout(initialTypingTimeoutId);
-        }
-      } catch (err) {
-        console.error('Error cleaning up socket listeners:', err);
-      }
-    };
-  }, [handleMessageReceived, handleUserListUpdate, handleUserTyping, handleConnectionStatus]);
-
-  // Send message handler
-  const handleSendMessage = useCallback((messageText) => {
-    try {
-      if (!messageText.trim() || !user) {
-        return false;
-      }
-
-      const message = {
-        text: messageText.trim(),
-        sender: user.username || user.name || 'Anonymous',
-        senderId: user.id,
-        timestamp: new Date().toISOString(),
-        id: Date.now() + Math.random()
-      };
-
-      if (isSocketConnected()) {
-        emitMessage('send_message', message);
-        
-        // Optimistically add message to local state
-        setMessages(prev => [...prev, message]);
-        scrollToBottom();
-        return true;
-      } else {
-        setError('Not connected to server. Please try again.');
-        return false;
-      }
-    } catch (err) {
-      console.error('Error sending message:', err);
-      setError('Failed to send message');
-      return false;
-    }
-  }, [user, scrollToBottom]);
-
-  // Typing indicator handler
-  const handleTyping = useCallback((isTyping) => {
-    try {
-      if (user && isSocketConnected()) {
-        emitMessage('typing', {
-          userId: user.id,
-          username: user.username || user.name,
-          isTyping
         });
       }
-    } catch (err) {
-      console.error('Error sending typing indicator:', err);
+    });
+
+    newSocket.on('message_error', (error) => {
+      console.error('Message error:', error);
+      alert('Failed to send message. Please try again.');
+    });
+
+    return () => {
+      newSocket.close();
+    };
+  }, [username]);
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const handleUsernameSubmit = (e) => {
+    e.preventDefault();
+    const trimmedUsername = username.trim();
+    if (trimmedUsername && socket) {
+      socket.emit('user_joined', { username: trimmedUsername });
     }
-  }, [user]);
+  };
 
-  if (isLoading) {
-    return (
-      <div className="chat-loading">
-        <div className="loading-spinner"></div>
-        <p>Loading chat...</p>
-      </div>
-    );
-  }
+  const handleMessageSubmit = (e) => {
+    e.preventDefault();
+    const trimmedMessage = newMessage.trim();
+    
+    if (trimmedMessage && socket && isConnected && username) {
+      console.log('Sending message:', { username, content: trimmedMessage });
+      
+      socket.emit('send_message', {
+        username,
+        content: trimmedMessage,
+        room: 'general'
+      });
+      
+      setNewMessage('');
+      
+      // Stop typing indicator
+      if (isTyping) {
+        socket.emit('typing_stop', { username, room: 'general' });
+        setIsTyping(false);
+      }
+    }
+  };
 
-  if (!user) {
+  const handleMessageChange = (e) => {
+    setNewMessage(e.target.value);
+    
+    if (socket && username) {
+      // Start typing indicator
+      if (!isTyping) {
+        socket.emit('typing_start', { username, room: 'general' });
+        setIsTyping(true);
+      }
+      
+      // Reset typing timeout
+      clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = setTimeout(() => {
+        socket.emit('typing_stop', { username, room: 'general' });
+        setIsTyping(false);
+      }, 2000);
+    }
+  };
+
+  const formatTimestamp = (timestamp) => {
+    const date = new Date(timestamp);
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
+  // If no username is set, show username form
+  if (!username) {
     return (
-      <div className="chat-error">
-        <p>User information not available. Please log in again.</p>
+      <div className="login-container">
+        <div className="login-card">
+          <h2>Welcome to FlashTalk</h2>
+          <form onSubmit={handleUsernameSubmit}>
+            <input
+              type="text"
+              placeholder="Enter your username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              required
+              maxLength={20}
+            />
+            <button type="submit">Join Chat</button>
+          </form>
+        </div>
       </div>
     );
   }
 
   return (
     <div className="chat-container">
-      {error && (
-        <div className="chat-error-banner">
-          <span>{error}</span>
-          <button onClick={() => setError(null)}>×</button>
-        </div>
-      )}
-      
       <div className="chat-header">
-        <h2>Chat Room</h2>
-        <div className={`connection-status ${isConnected ? 'connected' : 'disconnected'}`}>
-          {isConnected ? '🟢 Connected' : '🔴 Disconnected'}
+        <div className="header-left">
+          <h1>FlashTalk</h1>
+          <span className="welcome-text">Welcome, {username}!</span>
+        </div>
+        <div className="header-right">
+          <div className={`connection-status ${isConnected ? 'connected' : 'disconnected'}`}>
+            <span className="status-dot"></span>
+            {isConnected ? 'Connected' : 'Disconnected'}
+          </div>
+          <button 
+            className="logout-btn"
+            onClick={() => {
+              if (socket) socket.disconnect();
+              setUsername('');
+              setMessages([]);
+            }}
+          >
+            Logout
+          </button>
         </div>
       </div>
 
-      <div className="chat-body">
-        <div className="chat-main">
-          <MessageList 
-            messages={messages} 
-            currentUser={user}
-            typingUsers={typingUsers}
-          />
-          <div ref={messagesEndRef} />
+      <div className="chat-main">
+        <div className="chat-messages">
+          <div className="chat-room-header">
+            <h2>Chat Room</h2>
+          </div>
           
-          <MessageInput 
-            onSendMessage={handleSendMessage}
-            onTyping={handleTyping}
-            disabled={!isConnected}
-          />
+          <div className="messages-container">
+            {messages.length === 0 ? (
+              <div className="no-messages">
+                <p>No messages yet. Start the conversation!</p>
+              </div>
+            ) : (
+              messages.map((message) => (
+                <div 
+                  key={message.id} 
+                  className={`message ${message.username === username ? 'own-message' : 'other-message'}`}
+                >
+                  <div className="message-header">
+                    <span className="message-username">{message.username}</span>
+                    <span className="message-time">{formatTimestamp(message.timestamp)}</span>
+                  </div>
+                  <div className="message-content">{message.content}</div>
+                </div>
+              ))
+            )}
+            
+            {typingUsers.length > 0 && (
+              <div className="typing-indicator">
+                <span>{typingUsers.join(', ')} {typingUsers.length === 1 ? 'is' : 'are'} typing...</span>
+              </div>
+            )}
+            
+            <div ref={messagesEndRef} />
+          </div>
+
+          <form className="message-form" onSubmit={handleMessageSubmit}>
+            <input
+              type="text"
+              placeholder="Type your message..."
+              value={newMessage}
+              onChange={handleMessageChange}
+              disabled={!isConnected}
+              maxLength={500}
+            />
+            <button type="submit" disabled={!isConnected || !newMessage.trim()}>
+              Send
+            </button>
+          </form>
         </div>
-        
-        <div className="chat-sidebar">
-          <UserList 
-            users={onlineUsers} 
-            currentUser={user}
-          />
+
+        <div className="online-users">
+          <div className="users-header">
+            <h3>Online Users ({onlineCount})</h3>
+          </div>
+          <div className="users-list">
+            {onlineUsers.map((user) => (
+              <div key={user.id} className="user-item">
+                <div className="user-avatar">
+                  {user.username.charAt(0).toUpperCase()}
+                </div>
+                <span className="user-name">{user.username}</span>
+                {user.username === username && <span className="you-label">(You)</span>}
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>

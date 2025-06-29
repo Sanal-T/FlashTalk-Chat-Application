@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import './App.css';
 import ErrorBoundary from './components/ErrorBoundary';
-import Chat from './components/Chat';
+import Chat from './components/chat';
 import LoginForm from './components/LoginForm';
 import { initializeSocket, disconnectSocket } from './services/socket';
 
