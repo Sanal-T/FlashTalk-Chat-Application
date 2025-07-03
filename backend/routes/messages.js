@@ -1,190 +1,158 @@
 const express = require('express');
-const router = express.Router();
+const { body, validationResult, query } = require('express-validator');
 const Message = require('../models/Message');
-const { auth, optionalAuth } = require('../middleware/auth');
+const auth = require('../middleware/auth');
 
-// Get messages for a specific room
-router.get('/:room', optionalAuth, async (req, res) => {
-  try {
-    const { room } = req.params;
-    const { limit = 50, skip = 0 } = req.query;
-    
-    const messages = await Message.find({ room })
-      .sort({ timestamp: -1 })
-      .limit(parseInt(limit))
-      .skip(parseInt(skip))
-      .lean();
-    
-    // Reverse to get chronological order
-    messages.reverse();
-    
-    res.json({
-      success: true,
-      messages,
-      count: messages.length
-    });
-  } catch (error) {
-    console.error('Get messages error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error fetching messages',
-      error: error.message
-    });
-  }
-});
+const router = express.Router();
 
-// Get all available rooms
-router.get('/', async (req, res) => {
-  try {
-    const rooms = await Message.distinct('room');
-    const roomStats = await Promise.all(
-      rooms.map(async (room) => {
-        const messageCount = await Message.countDocuments({ room });
-        const lastMessage = await Message.findOne({ room })
-          .sort({ timestamp: -1 })
-          .lean();
-        
-        return {
-          name: room,
-          messageCount,
-          lastMessage: lastMessage ? {
-            username: lastMessage.username,
-            message: lastMessage.message.substring(0, 50) + '...',
-            timestamp: lastMessage.timestamp
-          } : null
-        };
-      })
-    );
-    
-    res.json({
-      success: true,
-      rooms: roomStats
-    });
-  } catch (error) {
-    console.error('Get rooms error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error fetching rooms',
-      error: error.message
-    });
-  }
-});
+// Get messages with pagination
+router.get('/',
+  auth,
+  [
+    query('room').optional().trim().escape(),
+    query('page').optional().isInt({ min: 1 }).toInt(),
+    query('limit').optional().isInt({ min: 1, max: 100 }).toInt()
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
 
-// Create a new message (mainly for API testing)
-router.post('/', auth, async (req, res) => {
-  try {
-    const { message, room = 'general' } = req.body;
-    
-    if (!message || message.trim().length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Message content is required'
-      });
-    }
-    
-    if (message.trim().length > 1000) {
-      return res.status(400).json({
-        success: false,
-        message: 'Message too long (max 1000 characters)'
-      });
-    }
-    
-    const newMessage = new Message({
-      username: req.user.username,
-      message: message.trim(),
-      room: room.toLowerCase(),
-      messageType: 'user'
-    });
-    
-    await newMessage.save();
-    
-    res.status(201).json({
-      success: true,
-      message: 'Message created successfully',
-      data: newMessage
-    });
-  } catch (error) {
-    console.error('Create message error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error creating message',
-      error: error.message
-    });
-  }
-});
+      const { room = 'general', page = 1, limit = 50 } = req.query;
+      const skip = (page - 1) * limit;
 
-// Delete a message (for moderation)
-router.delete('/:messageId', auth, async (req, res) => {
-  try {
-    const { messageId } = req.params;
-    
-    const message = await Message.findById(messageId);
-    if (!message) {
-      return res.status(404).json({
-        success: false,
-        message: 'Message not found'
-      });
-    }
-    
-    // Only allow users to delete their own messages (or implement admin check)
-    if (message.username !== req.user.username && !req.user.isAdmin) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized to delete this message'
-      });
-    }
-    
-    await Message.findByIdAndDelete(messageId);
-    
-    res.json({
-      success: true,
-      message: 'Message deleted successfully'
-    });
-  } catch (error) {
-    console.error('Delete message error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error deleting message',
-      error: error.message
-    });
-  }
-});
+      const messages = await Message.find({ room })
+        .populate('sender', 'username avatar')
+        .populate('replyTo', 'content sender')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit);
 
-// Search messages
-router.get('/search/:room', optionalAuth, async (req, res) => {
-  try {
-    const { room } = req.params;
-    const { q, limit = 20 } = req.query;
-    
-    if (!q || q.trim().length < 2) {
-      return res.status(400).json({
-        success: false,
-        message: 'Search query must be at least 2 characters'
+      const totalMessages = await Message.countDocuments({ room });
+      const totalPages = Math.ceil(totalMessages / limit);
+
+      res.json({
+        messages: messages.reverse(), // Reverse to show oldest first
+        pagination: {
+          currentPage: page,
+          totalPages,
+          totalMessages,
+          hasMore: page < totalPages
+        }
       });
+    } catch (error) {
+      console.error('Get messages error:', error);
+      res.status(500).json({ message: 'Server error' });
     }
-    
-    const messages = await Message.find({
-      room,
-      message: { $regex: q, $options: 'i' }
-    })
-      .sort({ timestamp: -1 })
-      .limit(parseInt(limit))
-      .lean();
-    
-    res.json({
-      success: true,
-      messages,
-      count: messages.length,
-      query: q
-    });
-  } catch (error) {
-    console.error('Search messages error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Error searching messages',
-      error: error.message
-    });
   }
-});
+);
+
+// Send message
+router.post('/',
+  auth,
+  [
+    body('content')
+      .trim()
+      .isLength({ min: 1, max: 1000 })
+      .withMessage('Message content must be between 1 and 1000 characters'),
+    body('room').optional().trim().escape(),
+    body('replyTo').optional().isMongoId().withMessage('Invalid reply message ID')
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const { content, room = 'general', replyTo } = req.body;
+
+      const message = new Message({
+        sender: req.userId,
+        content,
+        room,
+        replyTo: replyTo || undefined
+      });
+
+      await message.save();
+      await message.populate('sender', 'username avatar');
+
+      res.status(201).json(message);
+    } catch (error) {
+      console.error('Send message error:', error);
+      res.status(500).json({ message: 'Server error' });
+    }
+  }
+);
+
+// Delete message
+router.delete('/:id',
+  auth,
+  async (req, res) => {
+    try {
+      const message = await Message.findById(req.params.id);
+      
+      if (!message) {
+        return res.status(404).json({ message: 'Message not found' });
+      }
+
+      // Check if user owns the message
+      if (message.sender.toString() !== req.userId) {
+        return res.status(403).json({ message: 'Not authorized to delete this message' });
+      }
+
+      await Message.findByIdAndDelete(req.params.id);
+      res.json({ message: 'Message deleted successfully' });
+    } catch (error) {
+      console.error('Delete message error:', error);
+      res.status(500).json({ message: 'Server error' });
+    }
+  }
+);
+
+// Edit message
+router.put('/:id',
+  auth,
+  [
+    body('content')
+      .trim()
+      .isLength({ min: 1, max: 1000 })
+      .withMessage('Message content must be between 1 and 1000 characters')
+  ],
+  async (req, res) => {
+    try {
+      const errors = validationResult(req);
+      if (!errors.isEmpty()) {
+        return res.status(400).json({ errors: errors.array() });
+      }
+
+      const { content } = req.body;
+      const message = await Message.findById(req.params.id);
+
+      if (!message) {
+        return res.status(404).json({ message: 'Message not found' });
+      }
+
+      // Check if user owns the message
+      if (message.sender.toString() !== req.userId) {
+        return res.status(403).json({ message: 'Not authorized to edit this message' });
+      }
+
+      message.content = content;
+      message.edited = true;
+      message.editedAt = new Date();
+
+      await message.save();
+      await message.populate('sender', 'username avatar');
+
+      res.json(message);
+    } catch (error) {
+      console.error('Edit message error:', error);
+      res.status(500).json({ message: 'Server error' });
+    }
+  }
+);
 
 module.exports = router;

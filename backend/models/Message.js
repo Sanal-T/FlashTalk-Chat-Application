@@ -1,12 +1,12 @@
 const mongoose = require('mongoose');
 
 const messageSchema = new mongoose.Schema({
-  username: {
-    type: String,
-    required: true,
-    trim: true
+  sender: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
   },
-  message: {
+  content: {
     type: String,
     required: true,
     trim: true,
@@ -14,25 +14,42 @@ const messageSchema = new mongoose.Schema({
   },
   room: {
     type: String,
-    required: true,
-    default: 'general'
-  },
-  timestamp: {
-    type: Date,
-    default: Date.now
+    default: 'general',
+    required: true
   },
   messageType: {
     type: String,
-    enum: ['user', 'system'],
-    default: 'user'
+    enum: ['text', 'image', 'file'],
+    default: 'text'
+  },
+  edited: {
+    type: Boolean,
+    default: false
+  },
+  editedAt: {
+    type: Date
+  },
+  reactions: [{
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    emoji: String,
+    timestamp: {
+      type: Date,
+      default: Date.now
+    }
+  }],
+  replyTo: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Message'
   }
 }, {
   timestamps: true
 });
 
-// Index for efficient queries
-messageSchema.index({ room: 1, timestamp: -1 });
+// Indexes for better performance
+messageSchema.index({ room: 1, createdAt: -1 });
+messageSchema.index({ sender: 1 });
 
-const Message = mongoose.model('Message', messageSchema);
-
-module.exports = Message;
+module.exports = mongoose.model('Message', messageSchema);

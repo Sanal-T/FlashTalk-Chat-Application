@@ -2,184 +2,185 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
-const mongoose = require('mongoose');
+const helmet = require('helmet');
+const compression = require('compression');
+const morgan = require('morgan');
+const rateLimit = require('express-rate-limit');
 require('dotenv').config();
+
+const connectDB = require('./config/database');
+const authRoutes = require('./routes/auth');
+const messageRoutes = require('./routes/messages');
+const socketAuth = require('./utils/socketAuth');
 
 const app = express();
 const server = http.createServer(app);
-
-// Configure CORS for Socket.IO
 const io = socketIo(server, {
   cors: {
-    origin: process.env.CORS_ORIGIN || "http://localhost:3000",
+    origin: process.env.FRONTEND_URL || "http://localhost:3000",
     methods: ["GET", "POST"],
     credentials: true
   }
 });
 
-// Middleware
+// Connect to MongoDB
+connectDB();
+
+// Security middleware
+app.use(helmet());
+app.use(compression());
+app.use(morgan('combined'));
+
+// Rate limiting
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // limit each IP to 100 requests per windowMs
+  message: 'Too many requests from this IP, please try again later.'
+});
+app.use('/api/', limiter);
+
+// CORS configuration
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || "http://localhost:3000",
+  origin: process.env.FRONTEND_URL || "http://localhost:3000",
   credentials: true
 }));
-app.use(express.json());
 
-// MongoDB Connection
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/flashtalk', {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
-});
+// Body parsing middleware
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
 
-// Message Schema
-const messageSchema = new mongoose.Schema({
-  username: { type: String, required: true },
-  content: { type: String, required: true },
-  timestamp: { type: Date, default: Date.now },
-  room: { type: String, default: 'general' }
-});
-
-const Message = mongoose.model('Message', messageSchema);
-
-// Store online users
-const onlineUsers = new Map();
-
-// Socket.IO connection handling
-io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
-
-  // Handle user joining
-  socket.on('user_joined', (userData) => {
-    console.log('User joined:', userData);
-    
-    // Store user info
-    onlineUsers.set(socket.id, {
-      id: socket.id,
-      username: userData.username || `User${Math.floor(Math.random() * 1000)}`,
-      joinedAt: new Date()
-    });
-
-    // Join default room
-    socket.join('general');
-
-    // Broadcast updated online users count and list
-    const usersList = Array.from(onlineUsers.values());
-    io.emit('online_users_updated', {
-      count: usersList.length,
-      users: usersList
-    });
-
-    // Send recent messages to the newly connected user
-    Message.find({ room: 'general' })
-      .sort({ timestamp: -1 })
-      .limit(50)
-      .then(messages => {
-        socket.emit('message_history', messages.reverse());
-      })
-      .catch(err => console.error('Error fetching messages:', err));
-  });
-
-  // Handle sending messages
-  socket.on('send_message', async (messageData) => {
-    console.log('Message received:', messageData);
-    
-    try {
-      // Create and save message to database
-      const newMessage = new Message({
-        username: messageData.username || onlineUsers.get(socket.id)?.username || 'Anonymous',
-        content: messageData.content,
-        room: messageData.room || 'general',
-        timestamp: new Date()
-      });
-
-      const savedMessage = await newMessage.save();
-      console.log('Message saved:', savedMessage);
-
-      // Broadcast message to all users in the room
-      io.to(messageData.room || 'general').emit('receive_message', {
-        id: savedMessage._id,
-        username: savedMessage.username,
-        content: savedMessage.content,
-        timestamp: savedMessage.timestamp
-      });
-
-    } catch (error) {
-      console.error('Error saving message:', error);
-      socket.emit('message_error', { error: 'Failed to send message' });
-    }
-  });
-
-  // Handle typing indicators
-  socket.on('typing_start', (data) => {
-    socket.to(data.room || 'general').emit('user_typing', {
-      username: data.username,
-      isTyping: true
-    });
-  });
-
-  socket.on('typing_stop', (data) => {
-    socket.to(data.room || 'general').emit('user_typing', {
-      username: data.username,
-      isTyping: false
-    });
-  });
-
-  // Handle disconnection
-  socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
-    
-    // Remove user from online users
-    onlineUsers.delete(socket.id);
-
-    // Broadcast updated online users count and list
-    const usersList = Array.from(onlineUsers.values());
-    io.emit('online_users_updated', {
-      count: usersList.length,
-      users: usersList
-    });
-  });
-});
-
-// API Routes for messages
-app.get('/api/messages', async (req, res) => {
-  try {
-    const messages = await Message.find({ room: req.query.room || 'general' })
-      .sort({ timestamp: -1 })
-      .limit(100);
-    res.json(messages.reverse());
-  } catch (error) {
-    console.error('Error fetching messages:', error);
-    res.status(500).json({ error: 'Failed to fetch messages' });
-  }
-});
-
-app.post('/api/messages', async (req, res) => {
-  try {
-    const { username, content, room } = req.body;
-    const newMessage = new Message({
-      username,
-      content,
-      room: room || 'general'
-    });
-    const savedMessage = await newMessage.save();
-    res.status(201).json(savedMessage);
-  } catch (error) {
-    console.error('Error creating message:', error);
-    res.status(500).json({ error: 'Failed to create message' });
-  }
-});
+// Routes
+app.use('/api/auth', authRoutes);
+app.use('/api/messages', messageRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    onlineUsers: onlineUsers.size,
-    timestamp: new Date().toISOString()
+  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+});
+
+// Socket.IO authentication middleware
+io.use(socketAuth);
+
+// Socket.IO connection handling
+const activeUsers = new Map();
+const typingUsers = new Map();
+
+io.on('connection', (socket) => {
+  console.log(`User connected: ${socket.userId}`);
+  
+  // Add user to active users
+  activeUsers.set(socket.userId, {
+    id: socket.userId,
+    username: socket.username,
+    socketId: socket.id,
+    status: 'online',
+    lastSeen: new Date()
+  });
+  
+  // Broadcast updated user list
+  io.emit('users_updated', Array.from(activeUsers.values()));
+  
+  // Join user to their own room for private messages
+  socket.join(socket.userId);
+  
+  // Handle joining rooms
+  socket.on('join_room', (roomId) => {
+    socket.join(roomId);
+    socket.emit('joined_room', roomId);
+  });
+  
+  // Handle sending messages
+  socket.on('send_message', async (data) => {
+    try {
+      const Message = require('./models/Message');
+      const message = new Message({
+        sender: socket.userId,
+        content: data.content,
+        room: data.room || 'general',
+        timestamp: new Date()
+      });
+      
+      await message.save();
+      await message.populate('sender', 'username');
+      
+      // Emit to room
+      io.to(data.room || 'general').emit('receive_message', {
+        _id: message._id,
+        content: message.content,
+        sender: message.sender,
+        timestamp: message.timestamp,
+        room: message.room
+      });
+      
+    } catch (error) {
+      socket.emit('error', { message: 'Failed to send message' });
+    }
+  });
+  
+  // Handle typing indicators
+  socket.on('typing_start', (data) => {
+    const room = data.room || 'general';
+    if (!typingUsers.has(room)) {
+      typingUsers.set(room, new Set());
+    }
+    typingUsers.get(room).add(socket.username);
+    socket.to(room).emit('user_typing', {
+      username: socket.username,
+      isTyping: true,
+      room: room
+    });
+  });
+  
+  socket.on('typing_stop', (data) => {
+    const room = data.room || 'general';
+    if (typingUsers.has(room)) {
+      typingUsers.get(room).delete(socket.username);
+      if (typingUsers.get(room).size === 0) {
+        typingUsers.delete(room);
+      }
+    }
+    socket.to(room).emit('user_typing', {
+      username: socket.username,
+      isTyping: false,
+      room: room
+    });
+  });
+  
+  // Handle disconnect
+  socket.on('disconnect', () => {
+    console.log(`User disconnected: ${socket.userId}`);
+    activeUsers.delete(socket.userId);
+    
+    // Remove from typing users
+    typingUsers.forEach((users, room) => {
+      users.delete(socket.username);
+      if (users.size === 0) {
+        typingUsers.delete(room);
+      }
+    });
+    
+    // Broadcast updated user list
+    io.emit('users_updated', Array.from(activeUsers.values()));
   });
 });
 
-const PORT = process.env.PORT || 5000;
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({ 
+    message: 'Something went wrong!',
+    error: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error'
+  });
+});
 
+// 404 handler
+app.use('*', (req, res) => {
+  res.status(404).json({ message: 'Route not found' });
+});
+
+const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-  console.log(`MongoDB URI: ${process.env.MONGODB_URI || 'mongodb://localhost:27017/flashtalk'}`);
 });
+
+module.exports = { app, server };
