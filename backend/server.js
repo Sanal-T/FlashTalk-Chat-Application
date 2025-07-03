@@ -6,6 +6,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { body, validationResult } = require('express-validator');
 require('dotenv').config();
+const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
