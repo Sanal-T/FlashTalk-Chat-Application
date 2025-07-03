@@ -12,7 +12,7 @@ import './Chat.css';
 const Chat = () => {
   const [messages, setMessages] = useState([]);
   const [users, setUsers] = useState([]);
-  const [currentRoom, setCurrentRoom] = useState('general');
+  const [currentRoom] = useState('general');
   const [loading, setLoading] = useState(true);
   const [typingUsers, setTypingUsers] = useState([]);
   const [showUserList, setShowUserList] = useState(false);
@@ -21,8 +21,30 @@ const Chat = () => {
 
   const { user, logout } = useAuth();
 
+  const loadMessages = React.useCallback(async () => {
+    try {
+      const response = await messageAPI.getMessages(currentRoom);
+      setMessages(response.data.messages);
+    } catch (error) {
+      console.error('Failed to load messages:', error);
+      toast.error('Failed to load messages');
+    }
+  }, [currentRoom]);
+
+  const initializeChat = React.useCallback(async () => {
+    try {
+      await loadMessages();
+      socketService.joinRoom(currentRoom);
+    } catch (error) {
+      console.error('Failed to initialize chat:', error);
+      toast.error('Failed to load chat');
+    } finally {
+      setLoading(false);
+    }
+  }, [currentRoom, loadMessages]);
+
   useEffect(() => {
-    // Removed duplicate initializeChat function
+    initializeChat();
 
     const setupSocketListeners = () => {
       socketService.onMessage((message) => {
@@ -51,69 +73,13 @@ const Chat = () => {
       });
     };
 
-    initializeChat();
     setupSocketListeners();
-    
+
+    // Cleanup listeners on unmount
     return () => {
-      socketService.removeAllListeners();
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-      }
+      socketService.removeAllListeners && socketService.removeAllListeners();
     };
-  }, [currentRoom]);
-
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages]);
-
-  const initializeChat = async () => {
-    try {
-      await loadMessages();
-      socketService.joinRoom(currentRoom);
-    } catch (error) {
-      console.error('Failed to initialize chat:', error);
-      toast.error('Failed to load chat');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadMessages = async () => {
-    try {
-      const response = await messageAPI.getMessages(currentRoom);
-      setMessages(response.data.messages);
-    } catch (error) {
-      console.error('Failed to load messages:', error);
-      toast.error('Failed to load messages');
-    }
-  };
-
-  const setupSocketListeners = () => {
-    socketService.onMessage((message) => {
-      setMessages(prev => [...prev, message]);
-    });
-
-    socketService.onUsersUpdated((userList) => {
-      setUsers(userList);
-    });
-
-    socketService.onTyping((data) => {
-      if (data.room === currentRoom) {
-        setTypingUsers(prev => {
-          if (data.isTyping) {
-            return prev.includes(data.username) ? prev : [...prev, data.username];
-          } else {
-            return prev.filter(username => username !== data.username);
-          }
-        });
-      }
-    });
-
-    socketService.onError((error) => {
-      console.error('Socket error:', error);
-      toast.error(error.message || 'Connection error');
-    });
-  };
+  }, [initializeChat, currentRoom]);
 
   const handleSendMessage = async (content) => {
     if (!content.trim()) return;
@@ -156,27 +122,23 @@ const Chat = () => {
   const handleTyping = (isTyping) => {
     if (isTyping) {
       socketService.startTyping(currentRoom);
-      
-      // Clear existing timeout
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-      }
-      
-      // Set new timeout to stop typing
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       typingTimeoutRef.current = setTimeout(() => {
         socketService.stopTyping(currentRoom);
       }, 3000);
     } else {
       socketService.stopTyping(currentRoom);
-      if (typingTimeoutRef.current) {
-        clearTimeout(typingTimeoutRef.current);
-      }
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     }
   };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
 
   const toggleUserList = () => {
     setShowUserList(!showUserList);
