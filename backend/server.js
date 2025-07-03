@@ -2,6 +2,9 @@ const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const { body, validationResult } = require('express-validator');
 require('dotenv').config();
 
 const app = express();
@@ -15,7 +18,12 @@ const io = socketIo(server, {
 
 // Middleware
 app.use(cors());
+app.use(helmet());
 app.use(express.json());
+app.use(rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100 // limit each IP to 100 requests per windowMs
+}));
 
 // Routes
 app.use('/api/users', require('./routes/users'));
