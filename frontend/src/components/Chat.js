@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import socketService from '../services/socket';
 import { messageAPI } from '../services/api';
@@ -21,7 +21,7 @@ const Chat = () => {
 
   const { user, logout } = useAuth();
 
-  const loadMessages = React.useCallback(async () => {
+  const loadMessages = useCallback(async () => {
     try {
       const response = await messageAPI.getMessages(currentRoom);
       setMessages(response.data.messages);
@@ -31,7 +31,7 @@ const Chat = () => {
     }
   }, [currentRoom]);
 
-  const initializeChat = React.useCallback(async () => {
+  const initializeChat = useCallback(async () => {
     try {
       await loadMessages();
       socketService.joinRoom(currentRoom);
@@ -48,7 +48,7 @@ const Chat = () => {
 
     const setupSocketListeners = () => {
       socketService.onMessage((message) => {
-        setMessages(prev => [...prev, message]);
+        setMessages((prev) => [...prev, message]);
       });
 
       socketService.onUsersUpdated((userList) => {
@@ -57,13 +57,13 @@ const Chat = () => {
 
       socketService.onTyping((data) => {
         if (data.room === currentRoom) {
-          setTypingUsers(prev => {
-            if (data.isTyping) {
-              return prev.includes(data.username) ? prev : [...prev, data.username];
-            } else {
-              return prev.filter(username => username !== data.username);
-            }
-          });
+          setTypingUsers((prev) =>
+            data.isTyping
+              ? prev.includes(data.username)
+                ? prev
+                : [...prev, data.username]
+              : prev.filter((username) => username !== data.username)
+          );
         }
       });
 
@@ -75,7 +75,6 @@ const Chat = () => {
 
     setupSocketListeners();
 
-    // Cleanup listeners on unmount
     return () => {
       socketService.removeAllListeners && socketService.removeAllListeners();
     };
@@ -87,7 +86,7 @@ const Chat = () => {
     try {
       socketService.sendMessage({
         content: content.trim(),
-        room: currentRoom
+        room: currentRoom,
       });
     } catch (error) {
       console.error('Failed to send message:', error);
@@ -98,7 +97,7 @@ const Chat = () => {
   const handleDeleteMessage = async (messageId) => {
     try {
       await messageAPI.deleteMessage(messageId);
-      setMessages(prev => prev.filter(msg => msg._id !== messageId));
+      setMessages((prev) => prev.filter((msg) => msg._id !== messageId));
       toast.success('Message deleted');
     } catch (error) {
       console.error('Failed to delete message:', error);
@@ -109,9 +108,9 @@ const Chat = () => {
   const handleEditMessage = async (messageId, newContent) => {
     try {
       const response = await messageAPI.editMessage(messageId, newContent);
-      setMessages(prev => prev.map(msg => 
-        msg._id === messageId ? response.data : msg
-      ));
+      setMessages((prev) =>
+        prev.map((msg) => (msg._id === messageId ? response.data : msg))
+      );
       toast.success('Message updated');
     } catch (error) {
       console.error('Failed to edit message:', error);
@@ -141,7 +140,7 @@ const Chat = () => {
   }, [messages]);
 
   const toggleUserList = () => {
-    setShowUserList(!showUserList);
+    setShowUserList((prev) => !prev);
   };
 
   if (loading) {

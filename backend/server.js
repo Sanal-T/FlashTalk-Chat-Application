@@ -1,62 +1,70 @@
 const express = require('express');
 const http = require('http');
-const socketIo = require('socket.io');
+const mongoose = require('mongoose');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const { Server } = require('socket.io');
 const { body, validationResult } = require('express-validator');
-require('dotenv').config();
 const path = require('path');
+require('dotenv').config();
+
+const authRoutes = require('./routes/auth');
+const messageRoutes = require('./routes/message');
+const { handleSocketConnection } = require('./socket');
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server, {
+const io = new Server(server, {
   cors: {
-    origin: '*',
-    methods: ['GET', 'POST']
+    origin: process.env.CLIENT_URL || "http://localhost:3000",
+    methods: ["GET", "POST"],
+    credentials: true
   }
 });
 
-// Middleware
-app.use(cors());
+// === Middleware ===
+app.use(cors({
+  origin: process.env.CLIENT_URL || "http://localhost:3000",
+  credentials: true
+}));
 app.use(helmet());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ extended: true }));
 app.use(rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
+  max: 100 // limit each IP
 }));
 
-// Routes
-app.use('/api/users', require('./routes/users'));
-app.use('/api/messages', require('./routes/messages'));
+// === Routes ===
+app.use('/api/auth', authRoutes);
+app.use('/api/messages', messageRoutes);
 
-// Socket.IO logic
-io.on('connection', (socket) => {
-  console.log('New user connected:', socket.id);
-
-  socket.on('send_message', (data) => {
-    console.log('Message received:', data);
-    socket.broadcast.emit('receive_message', data); // send to others
-  });
-
-  socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
-  });
-});
-
-// 404 handler
-app.use('*', (req, res) => {
-  res.status(404).json({ message: 'Route not found' });
-});
-
-// Serve static files (for production build)
+// === Serve Frontend in Production ===
 if (process.env.NODE_ENV === 'production') {
-  app.use(express.static(path.join(__dirname, 'client', 'build')));
+  app.use(express.static(path.join(__dirname, '../frontend/build')));
   app.get('*', (req, res) => {
-    res.sendFile(path.join(__dirname, 'client', 'build', 'index.html'));
+    res.sendFile(path.join(__dirname, '../frontend/build/index.html'));
   });
 }
 
-// Start server
+// === MongoDB Connection ===
+mongoose.connect(process.env.MONGO_URI, {
+  useNewUrlParser: true,
+  useUnifiedTopology: true
+}).then(() => {
+  console.log('MongoDB connected');
+}).catch((err) => {
+  console.error('MongoDB connection error:', err.message);
+});
+
+// === Socket.IO ===
+io.on('connection', (socket) => {
+  handleSocketConnection(io, socket);
+});
+
+// === Start Server ===
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
