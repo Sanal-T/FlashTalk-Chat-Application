@@ -193,7 +193,7 @@ const Chat = ({ currentUser, onLogout }) => {
         clearTimeout(typingTimeoutRef.current);
       }
     };
-  }, [currentUser]);
+  }, [currentUser, users.length]);
 
   // Auto-scroll to bottom when new messages arrive
   useEffect(() => {
