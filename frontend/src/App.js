@@ -3,7 +3,16 @@ import './App.css';
 import ErrorBoundary from './components/ErrorBoundary';
 import Chat from './components/chat';
 import LoginForm from './components/LoginForm';
-import { initializeSocket, disconnectSocket } from './services/socket';
+import socketService from './services/socket';
+
+import { Toaster } from 'react-hot-toast';
+
+<>
+  <Toaster />
+  <App />
+</>
+
+
 
 function App() {
   const [user, setUser] = useState(null);
@@ -18,7 +27,7 @@ function App() {
         if (savedUser) {
           const userData = JSON.parse(savedUser);
           setUser(userData);
-          initializeSocket(userData);
+          socketService.connect(userData);
         }
       } catch (err) {
         console.error('Error checking auth status:', err);
@@ -34,7 +43,7 @@ function App() {
 
     // Cleanup on unmount
     return () => {
-      disconnectSocket();
+      socketService.disconnect();
     };
   }, []);
 
@@ -43,7 +52,7 @@ function App() {
       setError(null);
       setUser(userData);
       localStorage.setItem('chatUser', JSON.stringify(userData));
-      initializeSocket(userData);
+      socketService.connect(userData);
     } catch (err) {
       console.error('Login error:', err);
       setError('Failed to login. Please try again.');
@@ -54,7 +63,7 @@ function App() {
     try {
       setUser(null);
       localStorage.removeItem('chatUser');
-      disconnectSocket();
+      socketService.disconnect();
       setError(null);
     } catch (err) {
       console.error('Logout error:', err);
