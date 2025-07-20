@@ -1,5 +1,6 @@
 # FlashTalk 💬
 
+
 **Seamless conversations in real-time**
 
 A modern, full-stack real-time chat application built with React, Node.js, and Socket.IO. ChatFlow provides instant messaging with live user status, message history, and a beautiful, responsive interface.
