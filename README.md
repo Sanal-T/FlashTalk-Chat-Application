@@ -8,7 +8,6 @@ A modern, full-stack real-time chat application built with React, Node.js, and S
 ![image](https://github.com/user-attachments/assets/27185673-d13e-4024-b63b-a9ba1981b717)
 
 
-
 ## ✨ Features
 
 - **Real-time messaging** - Instant message delivery with Socket.IO
